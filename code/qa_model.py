@@ -30,11 +30,35 @@ from tensorflow.python.ops import embedding_ops
 from evaluate import exact_match_score, f1_score
 from data_batcher import get_batch_generator
 from pretty_print import print_example
-from modules import RNNEncoder, SimpleSoftmaxLayer, BasicAttn
+#from visualize import visualize_matching
+#from modules import RNNEncoder, SimpleSoftmaxLayer, BasicAttn
+from modules import RNNEncoder, SimpleSoftmaxLayer, BasicAttn, GatedAttn, CoAttn, SelfAttn, PointerNetwork,  DynamicPointingDecoder, BidirectionalAttn, RNNEncoderV2, BiMPM, ModelingForBiDAF
 
 logging.basicConfig(level=logging.INFO)
 
 
+# def charCNN(input_char_ids, embed_dim, filter_size=100, window_size=5):
+#     # print input_char_ids.get_shape()
+#     conv = tf.layers.conv1d(input_char_ids, filter_size, window_size, padding='SAME', activation = tf.nn.relu)
+#     # print conv.get_shape()
+#     pool = tf.layers.max_pooling1d(tf.tanh(conv), 10, 1)
+#     # if pool.get_shape()[1] == 21:
+#     #     print input_char_ids.get_shape()
+#     # print tf.shape(tf.squeeze(pool,[1]))
+#     return tf.squeeze(pool,[1])
+#     '''
+#     print input_char_ids.get_shape()
+#     input_layer = tf.expand_dims(input_char_ids, -1)
+#     print input_layer.get_shape()
+#     reduced_length = input_layer.get_shape()[1] - window_size + 1
+#     # [batch_size x seq_length x embed_dim x feature_map_dim]
+#     conv = tf.layers.conv2d(input_layer, filter_size, [1,window_size], padding='SAME',activation=tf.nn.relu)
+#     print conv.get_shape()
+#     # [batch_size x 1 x 1 x feature_map_dim]
+#     pool = tf.nn.max_pool(tf.tanh(conv), [1, reduced_length, 1, 1], [1, 1, 1, 1], 'SAME')
+#     # print pool.get_shape() #(?,)  batch_size * feature_map_dim
+#     return tf.squeeze(pool)
+#     '''
 def charCNN(input_char_ids, filter_size=100, window_size=5):
     # Convolutional Layer #1
     conv2 = tf.layers.conv2d(
@@ -49,39 +73,6 @@ def charCNN(input_char_ids, filter_size=100, window_size=5):
     max_pooling = tf.nn.max_pool(tf.tanh(conv2), [1, 1, 10, 1], [1, 1, 1, 1], 'VALID')
 
     return tf.squeeze(max_pooling, [2])
-
-
-def char_MultiCNN(input_char_ids, filter_size=100, window_size=5):
-    # Convolutional Layer #1
-    conv1 = tf.layers.conv2d(
-                inputs=input_char_ids,
-                filters=25,
-                kernel_size=[1,window_size],
-                padding="SAME",
-                activation=tf.nn.relu)
-    # print conv1.get_shape()
-    # max_pooling
-    max_pooling1 = tf.nn.max_pool(tf.tanh(conv1), [1, 1, 4, 1], [1, 1, 1, 1], 'VALID')
-    # print max_pooling1.get_shape()
-    conv2 = tf.layers.conv2d(
-                inputs=max_pooling1,
-                filters=50,
-                kernel_size=[1,window_size],
-                padding="SAME",
-                activation=tf.nn.relu)
-    # print conv2.get_shape()
-    max_pooling2 = tf.nn.max_pool(tf.tanh(conv2), [1, 1, 4, 1], [1, 1, 1, 1], 'VALID')
-    # print max_pooling2.get_shape()
-    conv3 = tf.layers.conv2d(
-                inputs=max_pooling2,
-                filters=filter_size,
-                kernel_size=[1,window_size],
-                padding="SAME",
-                activation=tf.nn.relu)
-    # print conv3.get_shape()
-    max_pooling3 = tf.nn.max_pool(tf.tanh(conv3), [1, 1, 4, 1], [1, 1, 1, 1], 'VALID')
-    # print max_pooling3.get_shape()
-    return tf.squeeze(max_pooling3, [2])
 
 
 class QAModel(object):
@@ -123,6 +114,7 @@ class QAModel(object):
         # (updates is what you need to fetch in session.run to do a gradient update)
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
         opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate) # you can try other optimizers
+        #opt = tf.train.AdadeltaOptimizer(learning_rate=1, rho=0.95, epsilon=1e-6) 
         self.updates = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
 
         # Define savers (for checkpointing) and summaries (for tensorboard)
@@ -176,8 +168,8 @@ class QAModel(object):
             context_embs = embedding_ops.embedding_lookup(embedding_matrix, self.context_ids) # shape (batch_size, context_len, embedding_size)
             # print self.context_embs.get_shape()
             qn_embs = embedding_ops.embedding_lookup(embedding_matrix, self.qn_ids) # shape (batch_size, question_len, embedding_size)
-            # print qn_embs.get_shape()
-            with vs.variable_scope("character_level_cnn", reuse=tf.AUTO_REUSE) as scope:
+            
+            with vs.variable_scope("character_level_cnn", reuse=tf.AUTO_REUSE):
                 char_emb_matrix = tf.get_variable(shape=[self.FLAGS.char_vocab_size, self.FLAGS.char_embedding_size], 
                                                 dtype=tf.float32, name="char_emb_matrix") # (74, char_embedding_size)
                 reshaped_context_char_ids = tf.reshape(self.context_char_ids, [-1, self.FLAGS.word_len*self.FLAGS.context_len])  
@@ -187,8 +179,7 @@ class QAModel(object):
                 context_char_embs = tf.reshape(reshaped_context_char_embs, [-1, self.FLAGS.context_len, self.FLAGS.word_len, self.FLAGS.char_embedding_size])
                 # print context_char_embs.get_shape()
                 # cnn
-                # cnn_result = charCNN(context_char_embs)
-                cnn_result = char_MultiCNN(context_char_embs)
+                cnn_result = charCNN(context_char_embs)
                 # print cnn_result.get_shape()
                 self.context_embs = tf.concat([context_embs, cnn_result], axis=2)
                 # print self.context_embs.get_shape()
@@ -198,74 +189,9 @@ class QAModel(object):
                 qn_char_embs = tf.reshape(reshaped_qn_char_embs, [-1, self.FLAGS.question_len, self.FLAGS.word_len, self.FLAGS.char_embedding_size])
 
                 # cnn
-                # cnn_result = charCNN(qn_char_embs)
-                cnn_result = char_MultiCNN(qn_char_embs)
-                # print cnn_result.get_shape()
+                cnn_result = charCNN(qn_char_embs)
                 self.qn_embs = tf.concat([qn_embs, cnn_result], axis=2)
-
-            '''
-            qn_embs = []
-            context_embs = []
-            # Character-level
-            with vs.variable_scope("character_level_cnn", reuse=tf.AUTO_REUSE) as scope:
-                # Here, the embedding matrix will be trained using CNN
-                char_emb_matrix = tf.get_variable(shape=[self.FLAGS.char_vocab_size, self.FLAGS.char_embedding_size], 
-                                                dtype=tf.float32, name="char_emb_matrix") # (74, char_embedding_size)
-                # print char_emb_matrix.get_shape()
-                # print self.context_char_ids.get_shape()
-                splitted_context_chars = tf.split(self.context_char_ids, num_or_size_splits=self.FLAGS.context_len, axis=1)
-        
-                splitted_context = tf.split(tf.expand_dims(self.context_ids,-1), num_or_size_splits=self.FLAGS.context_len, axis=1)
-                for idx in range(self.FLAGS.context_len):
-                    # print splitted_context_chars[idx].get_shape()
-                    char_index = tf.reshape(splitted_context_chars[idx], [-1, self.FLAGS.word_len])
-                    word_index = tf.reshape(splitted_context[idx], [-1,1])
-                    
-                    char_embs = embedding_ops.embedding_lookup(char_emb_matrix, char_index)
-                    # print "------------- {} -------------".format(idx)
-                    # print char_embs.get_shape()
-                    char_cnn = charCNN(char_embs, self.FLAGS.char_embedding_size)
-                    # print char_cnn.get_shape()
-
-                    word_embs = embedding_ops.embedding_lookup(embedding_matrix, word_index)
-                    # remove dimension of size one from word_embs
-                    
-                    output = tf.concat([char_cnn, tf.squeeze(word_embs, [1])],1)
-                    # if idx == 1:
-                    #     print word_embs.get_shape()
-                    #     print output.get_shape()
-                    context_embs.append(output)
                 
-
-                splitted_qn_chars = tf.split(self.qn_char_ids, num_or_size_splits=self.FLAGS.question_len, axis=1)
-                # print len(splitted_qn_chars)
-                splitted_qn = tf.split(tf.expand_dims(self.qn_ids,-1), num_or_size_splits=self.FLAGS.question_len, axis=1)
-                for idx in range(self.FLAGS.question_len):
-                    char_index = tf.reshape(splitted_qn_chars[idx], [-1, self.FLAGS.word_len])
-                    word_index = tf.reshape(splitted_qn[idx], [-1,1])
-                    
-                    char_embs = embedding_ops.embedding_lookup(char_emb_matrix, char_index)
-                    # print "------------- {} -------------".format(idx)
-                    # print char_embs.get_shape()
-                    char_cnn = charCNN(char_embs, self.FLAGS.char_embedding_size)
-
-                    word_embs = embedding_ops.embedding_lookup(embedding_matrix, word_index)
-                    output = tf.concat([char_cnn, tf.squeeze(word_embs, [1])],1)
-
-                    qn_embs.append(output)
-                
-                self.context_embs = tf.stack(values=context_embs,axis=1)
-                self.qn_embs = tf.stack(values=qn_embs,axis=1)
-                '''
-                # print self.context_embs.get_shape()
-                # print self.qn_embs.get_shape()
-
-                # set_shape(...)
-                # New embeddings
-                # self.context_embs = tf.concat([self.context_embs, self.context_char_embs], axis=2)
-                # self.qn_embs = tf.concat([self.qn_embs, self.qn_char_embs], axis=2)
-                # self.context_mask = tf.concat([self.context_mask, self.context_char_mask], axis=2)
-
 
     def build_graph(self):
         """Builds the main part of the graph for the model, starting from the input embeddings to the final distributions for the answer span.
@@ -285,6 +211,68 @@ class QAModel(object):
         context_hiddens = encoder.build_graph(self.context_embs, self.context_mask) # (batch_size, context_len, hidden_size*2)
         question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask) # (batch_size, question_len, hidden_size*2)
 
+        # R-NET: gated attention layer
+        #gated_attn_layer = GatedAttn(self.keep_prob)
+        #context_hiddens = gated_attn_layer.build_graph(question_hiddens, context_hiddens, self.qn_mask)
+
+        # Use context hidden states to attend to question hidden states
+        #attn_layer = BasicAttn(self.keep_prob, self.FLAGS.hidden_size*2, self.FLAGS.hidden_size*2)
+        #_, attn_output = attn_layer.build_graph(question_hiddens, self.qn_mask, context_hiddens) # attn_output is shape (batch_size, context_len, hidden_size*2)
+
+        # Concat attn_output to context_hiddens to get blended_reps
+        #blended_reps = tf.concat([context_hiddens, attn_output], axis=2) # (batch_size, context_len, hidden_size*4)
+
+        # Use bidirectional attention flow
+        biDAF_layer = BidirectionalAttn(self.keep_prob, self.FLAGS.hidden_size*2, self.FLAGS.hidden_size*2)
+        C2Q, Q2C = biDAF_layer.build_graph(question_hiddens, self.qn_mask, context_hiddens, self.context_mask)
+        # Concat output_l, output_r to context_hiddens to get blended_reps
+        #blended_reps = tf.concat([context_hiddens, C2Q, Q2C], axis=2) # (batch_size, context_len, hidden_size*6)
+        blended_reps = tf.concat([context_hiddens, C2Q, context_hiddens*C2Q, context_hiddens*Q2C], axis=2) # (batch_size, context_len, hidden_size*8)
+        
+        # Modeling layer for BiDAF
+        biDAF_modeling_layer = ModelingForBiDAF(self.FLAGS.hidden_size, self.keep_prob)
+        modeling_output = biDAF_modeling_layer.build_graph(blended_reps, self.context_mask) # (batch_size, context_len, hidden_size*2)
+        
+        #encoder = RNNEncoderV2(self.FLAGS.hidden_size, self.keep_prob)
+        #context_fw, context_bw = encoder.build_graph(self.context_embs, self.context_mask) # (batch_size, context_len, hidden_size*2)
+        #question_fw, question_bw = encoder.build_graph(self.qn_embs, self.qn_mask) # (batch_size, question_len, hidden_size*2)
+        #mpm_layer = BiMPM(self.FLAGS.hidden_size, self.keep_prob)
+        #mpm_reps, _ = mpm_layer.build_graph(context_fw, context_bw, question_fw, question_bw, self.context_mask, self.qn_mask)
+        #self.matching_scores = mpm_reps # (batch_size, context_len, 8*MP_dim)
+        
+        #mpm_layer = BiMPM(self.FLAGS.hidden_size*2, self.keep_prob)
+        #mpm_reps, _ = mpm_layer.build_graph(context_hiddens, question_hiddens, self.context_mask, self.qn_mask)
+        #self.matching_scores = mpm_reps # (batch_size, context_len, 8*MP_dim)
+        
+        # Modeling layer for mpm
+        #mpm_modeling_layer = ModelingForBiDAF(self.FLAGS.hidden_size, self.keep_prob)
+        #modeling_output = mpm_modeling_layer.build_graph(mpm_reps, self.context_mask) # (batch_size, context_len, hidden_size*2)
+
+        # Coattention: 
+        #attn_layer = CoAttn(self.FLAGS.hidden_size*2, self.keep_prob)
+        #coattn_output = attn_layer.build_graph(question_hiddens, context_hiddens, self.qn_mask, self.context_mask) # attn_output is shape (batch_size, context_len, hidden_size*8)
+
+        # R-NET: self attention layer
+        #self_attn_layer = SelfAttn(self.keep_prob, self.FLAGS.hidden_size*4)
+        #self_attn_layer = SelfAttn(self.keep_prob, self.FLAGS.hidden_size*8)
+        #context_hiddens = self_attn_layer.build_graph(blended_reps, self.context_mask)
+        #context_hiddens = self_attn_layer.build_graph(coattn_output, self.context_mask)
+
+        # R-NET: pointer network output layer
+        #ptr_net = PointerNetwork()
+        #self.logits_start, self.probdist_start, self.logits_end, self.probdist_end = \
+        #ptr_net.build_graph(question_hiddens, context_hiddens, self.qn_mask, self.context_mask)
+        #self.logits_start, self.probdist_start, self.logits_end, self.probdist_end = \
+        #ptr_net.build_graph(question_hiddens, coattn_output, self.qn_mask, self.context_mask)
+        
+        # Dynamic Pointing Decoder output layer
+        dp_decoder =  DynamicPointingDecoder(self.keep_prob)
+        #self.logits_start, self.probdist_start, self.logits_end, self.probdist_end = dp_decoder.build_graph(coattn_output, self.context_mask)
+        #self.logits_start, self.probdist_start, self.logits_end, self.probdist_end = dp_decoder.build_graph(blended_reps, self.context_mask)
+        self.logits_start, self.probdist_start, self.logits_end, self.probdist_end = dp_decoder.build_graph(modeling_output, self.context_mask)
+        #self.logits_start, self.probdist_start, self.logits_end, self.probdist_end = dp_decoder.build_graph(mpm_reps, self.context_mask)
+        
+        """
         # Use context hidden states to attend to question hidden states
         attn_layer = BasicAttn(self.keep_prob, self.FLAGS.hidden_size*2, self.FLAGS.hidden_size*2)
         _, attn_output = attn_layer.build_graph(question_hiddens, self.qn_mask, context_hiddens) # attn_output is shape (batch_size, context_len, hidden_size*2)
@@ -308,7 +296,7 @@ class QAModel(object):
         with vs.variable_scope("EndDist"):
             softmax_layer_end = SimpleSoftmaxLayer()
             self.logits_end, self.probdist_end = softmax_layer_end.build_graph(blended_reps_final, self.context_mask)
-
+        """
 
     def add_loss(self):
         """
@@ -369,6 +357,7 @@ class QAModel(object):
         input_feed[self.qn_mask] = batch.qn_mask
         input_feed[self.ans_span] = batch.ans_span
         input_feed[self.keep_prob] = 1.0 - self.FLAGS.dropout # apply dropout
+
         # new
         input_feed[self.context_char_ids] = batch.char_context_ids
         input_feed[self.context_char_mask] = batch.char_context_mask
@@ -406,6 +395,7 @@ class QAModel(object):
         input_feed[self.qn_mask] = batch.qn_mask
         input_feed[self.ans_span] = batch.ans_span
         # note you don't supply keep_prob here, so it will default to 1 i.e. no dropout
+        
         input_feed[self.context_char_ids] = batch.char_context_ids
         input_feed[self.context_char_mask] = batch.char_context_mask
         input_feed[self.qn_char_ids] = batch.char_qn_ids
@@ -435,6 +425,7 @@ class QAModel(object):
         input_feed[self.qn_ids] = batch.qn_ids
         input_feed[self.qn_mask] = batch.qn_mask
         # note you don't supply keep_prob here, so it will default to 1 i.e. no dropout
+
         input_feed[self.context_char_ids] = batch.char_context_ids
         input_feed[self.context_char_mask] = batch.char_context_mask
         input_feed[self.qn_char_ids] = batch.char_qn_ids
@@ -443,6 +434,38 @@ class QAModel(object):
         output_feed = [self.probdist_start, self.probdist_end]
         [probdist_start, probdist_end] = session.run(output_feed, input_feed)
         return probdist_start, probdist_end
+    
+    def get_matching_scores(self, session, batch):
+        """
+        Run forward-pass only; get matching scores.
+
+        Inputs:
+          session: TensorFlow session
+          batch: a Batch object
+
+        Returns:
+          matching_cores: shape (batch_size, 8*MPM_dim)
+        """
+
+        input_feed = {}
+        input_feed[self.context_ids] = batch.context_ids
+        input_feed[self.context_mask] = batch.context_mask
+        input_feed[self.qn_ids] = batch.qn_ids
+        input_feed[self.qn_mask] = batch.qn_mask
+        input_feed[self.ans_span] = batch.ans_span
+        # note you don't supply keep_prob here, so it will default to 1 i.e. no dropout
+
+        input_feed[self.context_char_ids] = batch.char_context_ids
+        input_feed[self.context_char_mask] = batch.char_context_mask
+        input_feed[self.qn_char_ids] = batch.char_qn_ids
+        input_feed[self.qn_char_ids] = batch.char_qn_mask
+
+        output_feed = [self.matching_scores]
+
+        [matching_scores] = session.run(output_feed, input_feed)
+
+        return matching_scores
+        
 
 
     def get_start_end_pos(self, session, batch):
@@ -461,8 +484,35 @@ class QAModel(object):
         start_dist, end_dist = self.get_prob_dists(session, batch)
 
         # Take argmax to get start_pos and end_post, both shape (batch_size)
-        start_pos = np.argmax(start_dist, axis=1)
-        end_pos = np.argmax(end_dist, axis=1)
+        #start_pos = np.argmax(start_dist, axis=1)
+        #end_pos = np.argmax(end_dist, axis=1)
+
+        # Smarter span selection at test time
+        start_dist = np.expand_dims(start_dist, 2) # shape (B, N, 1)
+        end_dist = np.expand_dims(end_dist, 1) # shape (B, 1, N)
+        scores = np.multiply(start_dist, end_dist) # shape (B, N, N)
+
+        # start <= end
+        scores = np.triu(scores)
+        # end <= start + 15
+        scores = np.tril(scores, 15)
+
+        B = scores.shape[0]
+        N = scores.shape[1]
+
+        start_pos = []
+        end_pos = []
+
+        for i in range(B):
+            scores_flat = scores[i].flatten()
+            idx_sort = [np.argmax(scores_flat)]
+            # collect start and end position for this example in the batch 
+            s_idx, e_idx = np.unravel_index(idx_sort, (N, N))
+            start_pos.extend(s_idx)
+            end_pos.extend(e_idx)
+
+        start_pos = np.asarray(start_pos)
+        end_pos = np.asarray(end_pos)
 
         return start_pos, end_pos
 
@@ -488,6 +538,7 @@ class QAModel(object):
         # We need to do this because if, for example, the true answer is cut
         # off the context, then the loss function is undefined.
         for batch in get_batch_generator(self.word2id, self.char2id, dev_context_path, dev_qn_path, dev_ans_path, self.FLAGS.batch_size, context_len=self.FLAGS.context_len, question_len=self.FLAGS.question_len, word_len=self.FLAGS.word_len, discard_long=True):
+
             # Get loss for this batch
             loss = self.get_loss(session, batch)
             curr_batch_size = batch.batch_size
@@ -543,11 +594,14 @@ class QAModel(object):
         # That means we're truncating, rather than discarding, examples with too-long context or questions
         for batch in get_batch_generator(self.word2id, self.char2id, context_path, qn_path, ans_path, self.FLAGS.batch_size, context_len=self.FLAGS.context_len, word_len=self.FLAGS.word_len, question_len=self.FLAGS.question_len, discard_long=False):
 
+
             pred_start_pos, pred_end_pos = self.get_start_end_pos(session, batch)
 
             # Convert the start and end positions to lists length batch_size
             pred_start_pos = pred_start_pos.tolist() # list length batch_size
             pred_end_pos = pred_end_pos.tolist() # list length batch_size
+            
+            #matching_scores = self.get_matching_scores(session, batch)
 
             for ex_idx, (pred_ans_start, pred_ans_end, true_ans_tokens) in enumerate(zip(pred_start_pos, pred_end_pos, batch.ans_tokens)):
                 example_num += 1
@@ -570,6 +624,9 @@ class QAModel(object):
                 # Optionally pretty-print
                 if print_to_screen:
                     print_example(self.word2id, batch.context_tokens[ex_idx], batch.qn_tokens[ex_idx], batch.ans_span[ex_idx, 0], batch.ans_span[ex_idx, 1], pred_ans_start, pred_ans_end, true_answer, pred_answer, f1, em)
+
+                #if save_heat_map:
+                #    visualize_matching(self.word2id, matching_scores[ex_idx], batch.context_tokens[ex_idx], batch.qn_tokens[ex_idx], batch.ans_span[ex_idx, 0], batch.ans_span[ex_idx, 1], pred_ans_start, pred_ans_end, true_answer, pred_answer)
 
                 if num_samples != 0 and example_num >= num_samples:
                     break
@@ -673,8 +730,8 @@ class QAModel(object):
 
 
                     # Early stopping based on dev EM. You could switch this to use F1 instead.
-                    if best_dev_em is None or dev_em > best_dev_em:
-                        best_dev_em = dev_em
+                    if best_dev_f1 is None or dev_f1 > best_dev_f1:
+                        best_dev_f1 = dev_f1
                         logging.info("Saving to %s..." % bestmodel_ckpt_path)
                         self.bestmodel_saver.save(session, bestmodel_ckpt_path, global_step=global_step)
 

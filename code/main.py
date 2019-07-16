@@ -50,15 +50,15 @@ tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped o
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use")
 tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of the hidden states")
 tf.app.flags.DEFINE_integer("context_len", 300, "The maximum context length of your model")
-tf.app.flags.DEFINE_integer("question_len", 20, "The maximum question length of your model")
-tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained word vectors. This needs to be one of the available GloVe dimensions: 50/100/200/300")
+tf.app.flags.DEFINE_integer("question_len", 30, "The maximum question length of your model")
+tf.app.flags.DEFINE_integer("embedding_size", 300, "Size of the pretrained word vectors. This needs to be one of the available GloVe dimensions: 50/100/200/300")
 tf.app.flags.DEFINE_integer("word_len", 10, "The maximum word length of the model")
 tf.app.flags.DEFINE_integer("char_vocab_size", 70, "The size of the character dictionary")
 tf.app.flags.DEFINE_integer("char_embedding_size", 20, "The size of the character-level embedding.")
 
 # How often to print, save, eval
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
-tf.app.flags.DEFINE_integer("save_every", 500, "How many iterations to do per save.")
+tf.app.flags.DEFINE_integer("save_every", 100, "How many iterations to do per save.")
 tf.app.flags.DEFINE_integer("eval_every", 500, "How many iterations to do per calculating loss/f1/em on dev set. Warning: this is fairly time-consuming so don't do it too often.")
 tf.app.flags.DEFINE_integer("keep", 1, "How many checkpoints to keep. 0 indicates keep all (you shouldn't need to do keep all though - it's very storage intensive).")
 
@@ -137,6 +137,17 @@ def main(unused_argv):
     dev_qn_path = os.path.join(FLAGS.data_dir, "dev.question")
     dev_ans_path = os.path.join(FLAGS.data_dir, "dev.span")
 
+    # Select model:
+    if FLAGS.experiment_name == "ver41":
+        FLAGS.context_len = 270
+        FLAGS.question_len = 25
+    elif FLAGS.experiment_name == "ver42":
+        FLAGS.context_len = 280
+        FLAGS.question_len = 28
+    elif FLAGS.experiment_name == "ver43":
+        FLAGS.context_len = 300
+        FLAGS.question_len = 30
+    
     # Initialize model
     qa_model = QAModel(FLAGS, id2word, word2id, emb_matrix, id2char, char2id) # ---> Need to modify the qamodel
 
@@ -154,8 +165,8 @@ def main(unused_argv):
         logging.getLogger().addHandler(file_handler)
 
         # Save a record of flags as a .json file in train_dir
-        with open(os.path.join(FLAGS.train_dir, "flags.json"), 'w') as fout:
-            json.dump(FLAGS.__flags, fout)
+        #with open(os.path.join(FLAGS.train_dir, "flags.json"), 'w') as fout:
+        #    json.dump(FLAGS.__flags, fout)
 
         # Make bestmodel dir if necessary
         if not os.path.exists(bestmodel_dir):
@@ -177,7 +188,17 @@ def main(unused_argv):
             initialize_model(sess, qa_model, bestmodel_dir, expect_exists=True)
 
             # Show examples with F1/EM scores
-            _, _ = qa_model.check_f1_em(sess, dev_context_path, dev_qn_path, dev_ans_path, "dev", num_samples=10, print_to_screen=True)
+            _, _ = qa_model.check_f1_em(sess, dev_context_path, dev_qn_path, dev_ans_path, "dev", num_samples=50, print_to_screen=True)
+            
+    
+    elif FLAGS.mode == "visualize_matching_scores":
+        with tf.Session(config=config) as sess:
+
+            # Load best model
+            initialize_model(sess, qa_model, bestmodel_dir, expect_exists=True)
+
+            # Show examples with F1/EM scores
+            _, _ = qa_model.check_f1_em(sess, dev_context_path, dev_qn_path, dev_ans_path, "dev", num_samples=9, save_heat_map=True)
 
 
     elif FLAGS.mode == "official_eval":

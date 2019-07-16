@@ -186,7 +186,12 @@ def refill_batches(batches, word2id, char2id, context_file, qn_file, ans_file, b
             if discard_long:
                 continue
             else: # truncate
-                context_ids = context_ids[:context_len]
+                #p = random.random()
+                #if p <= 0.33:
+                #    context_ids = context_ids[-1-context_len:-1] # truncate from start
+                #else:
+                #    context_ids = context_ids[:context_len] # truncate from end
+		context_ids = context_ids[:context_len]
 
         # Convert tokens to char ids
         context_char_tokens, context_char_ids, context_char_mask = tokens_to_charIDs(context_tokens, context_len, word_len, char2id)
